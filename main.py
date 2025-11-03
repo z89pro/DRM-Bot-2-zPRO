@@ -118,18 +118,109 @@ if __name__ == "__main__":
     
     async def main():
         await PRO.start()
-        # h = await PRO.get_chat_member(chat_id= int(-1002115046888), user_id=6695586027)
-        # print(h)
+        
+        # Initialize production components
+        try:
+            from database.database import db_manager
+            from core.download_manager import download_manager
+            
+            # Connect to database
+            await db_manager.connect()
+            LOGGER.info("Database connected successfully")
+            
+            # Start download manager
+            await download_manager.start()
+            LOGGER.info("Download manager started successfully")
+            
+        except Exception as e:
+            LOGGER.error(f"Error initializing production components: {e}")
+            # Continue without production features if they fail
+        
         bot_info = await PRO.get_me()
         LOGGER.info(f"<--- @{bot_info.username} Started --->")
         
         for i in chat_id:
             try:
-                await PRO.send_message(chat_id=i, text="**Bot Started! ♾ /pro **")
+                await PRO.send_message(chat_id=i, text="**🚀 Production Bot Started! Use /pro_enhanced for enhanced features**")
             except Exception as d:
                 print(d)
                 continue
+        
+        # Start background tasks
+        asyncio.create_task(background_cleanup_task())
+        asyncio.create_task(system_monitoring_task())
+        
         await idle()
+        
+        # Cleanup on shutdown
+        try:
+            await download_manager.stop()
+            await db_manager.disconnect()
+            LOGGER.info("Production components shut down successfully")
+        except Exception as e:
+            LOGGER.error(f"Error during shutdown: {e}")
+
+    async def background_cleanup_task():
+        """Background task for periodic cleanup"""
+        while True:
+            try:
+                await asyncio.sleep(3600)  # Run every hour
+                
+                # Import here to avoid circular imports
+                from database.database import db_manager
+                from core.download_manager import download_manager
+                
+                # Clean up old files
+                await download_manager.cleanup_old_files(max_age_hours=24)
+                
+                # Clean up old database records
+                await db_manager.cleanup_old_jobs(days=7)
+                await db_manager.cleanup_old_history(days=30)
+                await db_manager.cleanup_old_stats(days=7)
+                
+                LOGGER.info("Background cleanup completed")
+                
+            except Exception as e:
+                LOGGER.error(f"Error in background cleanup: {e}")
+                await asyncio.sleep(300)  # Wait 5 minutes before retry
+    
+    async def system_monitoring_task():
+        """Background task for system monitoring"""
+        while True:
+            try:
+                await asyncio.sleep(300)  # Run every 5 minutes
+                
+                # Import here to avoid circular imports
+                from database.database import db_manager
+                from database.models import SystemStats
+                from core.download_manager import download_manager
+                
+                # Get system status
+                system_status = await download_manager.get_system_status()
+                resources = system_status['system_resources']
+                
+                # Create system stats record
+                stats = SystemStats(
+                    active_downloads=system_status['active_downloads'],
+                    queued_downloads=system_status['queue_size'],
+                    disk_usage_gb=resources.get('disk_usage_gb', 0),
+                    memory_usage_mb=resources.get('memory_usage_mb', 0),
+                    cpu_usage_percent=resources.get('cpu_usage_percent', 0)
+                )
+                
+                # Save to database
+                await db_manager.save_system_stats(stats)
+                
+                # Log warnings for high resource usage
+                if resources.get('memory_percent', 0) > 85:
+                    LOGGER.warning(f"High memory usage: {resources['memory_percent']:.1f}%")
+                
+                if resources.get('disk_percent', 0) > 90:
+                    LOGGER.warning(f"High disk usage: {resources['disk_percent']:.1f}%")
+                
+            except Exception as e:
+                LOGGER.error(f"Error in system monitoring: {e}")
+                await asyncio.sleep(60)  # Wait 1 minute before retry
 
     asyncio.get_event_loop().run_until_complete(main())
     LOGGER.info(f"<---Bot Stopped--->")
